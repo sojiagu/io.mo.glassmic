@@ -27,3 +27,8 @@
 
 - 构建产物（`build/`、`.gradle/`、`*.apk`）未入库。
 - 未跟进官方后续 `1.4.x` 主线；本分支停在 `1.3.4` 基线上的本地增强。
+
+## 随仓库附带的本地依赖
+
+- `app/libs/sherpa-onnx.aar`：离线 Piper TTS 运行库
+- `local-m2/.../api-82.*`：Xposed API 82 离线兜底（`api.xposed.info` 不可用时）

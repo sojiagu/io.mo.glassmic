@@ -37,3 +37,8 @@ IDEA.md
 local-m2/
 _tts_download/
 _sync_work/
+# Keep offline TTS / Xposed fallback deps tracked
+!app/libs/
+!app/libs/**
+!local-m2/
+!local-m2/**
