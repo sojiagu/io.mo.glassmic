@@ -143,6 +143,12 @@ class SharedPcmPublisher @Inject constructor(
         runtime.setPosition(positionMs)
     }
 
+    /**
+     * 首个录音客户端接入时回调（例如微信开始录音）。
+     * 用于立刻停掉本机扬声器试听，避免与通话类 App 抢音频通路。
+     */
+    @Volatile var onFirstConsumerAttached: (() -> Unit)? = null
+
     /** Xposed 进程通过 ContentProvider 调到这里 */
     fun attachConsumer(
         consumerPackage: String,
@@ -151,6 +157,7 @@ class SharedPcmPublisher @Inject constructor(
         writeFd: ParcelFileDescriptor
     ) {
         val id = buildConsumerId(consumerPackage)
+        val wasEmpty = consumers.isEmpty()
         val fos = FileOutputStream(writeFd.fileDescriptor)
         val queue = Channel<ByteArray>(
             capacity = 3,
@@ -177,6 +184,10 @@ class SharedPcmPublisher @Inject constructor(
         startConsumerWriter(consumer)
         GlassLog.b("Publisher") { "新 consumer: $id pkg=$consumerPackage sr=$sampleRate ch=$channels" }
         ensureWriterRunning()
+        if (wasEmpty) {
+            runCatching { onFirstConsumerAttached?.invoke() }
+                .onFailure { GlassLog.b("Publisher") { "onFirstConsumerAttached 失败: ${it.message}" } }
+        }
     }
 
     fun setSource(

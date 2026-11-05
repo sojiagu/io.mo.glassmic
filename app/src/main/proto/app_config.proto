@@ -109,6 +109,8 @@ message FloatingWindow {
   string custom_icon_path = 5;
   bool waveform_enabled = 6;   // 实时波形悬浮窗开关
   float waveform_opacity = 7;  // 0.0 - 1.0，波形悬浮窗透明度，0 视为默认
+  // 本机扬声器同步试听（TTS / 本地 MP3）。未设置时默认开启。
+  optional bool speaker_preview_enabled = 8;
 }
 
 enum FloatingMode {

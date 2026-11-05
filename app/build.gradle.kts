@@ -15,20 +15,29 @@ android {
         applicationId = "io.mo.glassmic"
         minSdk = 29
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.3.4.1"
+        versionCode = 17
+        // api100/legacy：去掉 META-INF/xposed/java_init.list，module.prop=82，供 LSPosed 1.9.2 经典入口加载
+        versionName = "1.3.4-api100"
         resourceConfigurations += listOf("zh-rCN", "en")
+        // 与 :xposed / Sherpa TTS native 对齐，只打 arm64
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    androidResources {
+        // Piper .onnx / .fst 不能被 aapt 压缩，否则 sherpa-onnx 无法 mmap
+        noCompress += listOf("onnx", "fst")
     }
 
     buildTypes {
         debug { isMinifyEnabled = false }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // 正式包但不混淆/压缩资源，便于对照与二次修改
+            isMinifyEnabled = false
+            isShrinkResources = false
+            // 仓库未附带正式 keystore；用 debug 签名保证 APK 可直接安装。
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -79,10 +88,13 @@ protobuf {
 
 dependencies {
     implementation(project(":core"))
-    // xposed 模块作为 library 打入同一个 APK——libxposed API 101 通过 META-INF/xposed/java_init.list 找入口
+    // xposed 模块作为 library 打入同一个 APK；本构建为 api100/legacy，仅走 assets/xposed_init
     implementation(project(":xposed"))
     compileOnly(libs.libxposed.api)
     compileOnly(libs.legacy.xposed.api)
+
+    // 内置离线 TTS：Sherpa-ONNX（Piper 中文），本地 AAR 见 app/libs/sherpa-onnx.aar
+    implementation(files("libs/sherpa-onnx.aar"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

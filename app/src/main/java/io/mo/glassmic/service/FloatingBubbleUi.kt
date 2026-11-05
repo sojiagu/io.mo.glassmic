@@ -44,7 +44,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -91,6 +93,13 @@ enum class FloatMode { BALL, MINI_BAR, MENU, TTS, TTS_SETTINGS }
 data class FloatGroupItem(val id: String, val emoji: String, val name: String)
 data class FloatClipItem(val id: String, val name: String, val isCurrent: Boolean)
 
+/** 悬浮窗本地 MP3 搜索结果（MediaStore content Uri 字符串）。 */
+data class FloatLocalMp3Item(
+    val uriString: String,
+    val name: String,
+    val durationMs: Long,
+)
+
 /**
  * 展开态面板固定宽度。四种展开态共用同一个宽度，切 tab 时面板才不会横向跳动。
  * 服务端做右边缘避让时也按这个值算 —— 改宽度只改这里，不要再在别处写死数字。
@@ -119,6 +128,15 @@ fun FloatingBubbleRoot(
     opacity: Float,
     groups: List<FloatGroupItem>,
     clipsProvider: (String) -> Flow<List<FloatClipItem>>,
+    localMp3Query: String,
+    localMp3Results: List<FloatLocalMp3Item>,
+    localMp3Searching: Boolean,
+    localMp3ImportingUri: String?,
+    localMp3CountdownSec: Int = 0,
+    clipCountdownId: String? = null,
+    clipCountdownSec: Int = 0,
+    onLocalMp3QueryChange: (String) -> Unit,
+    onImportLocalMp3: (uriString: String, displayName: String, preferredGroupId: String?) -> Unit,
     onBallTap: () -> Unit,
     onTogglePause: () -> Unit,
     onSeek: (Float) -> Unit,
@@ -135,6 +153,8 @@ fun FloatingBubbleRoot(
     ttsActive: Boolean,
     onOpenTtsSettings: () -> Unit,
     onToggleTtsProgressBar: (Boolean) -> Unit,
+    speakerPreviewEnabled: Boolean = true,
+    onToggleSpeakerPreview: (Boolean) -> Unit = {},
     ttsDelayMs: Int,
     onSetTtsDelay: (Int) -> Unit,
     ttsDelayRemainingMs: Long,
@@ -221,7 +241,16 @@ fun FloatingBubbleRoot(
                         selectedGroup = selectedGroup,
                         onSelectGroup = { selectedGroup = it },
                         clipsProvider = clipsProvider,
-                        onSelectClip = onSelectClip
+                        onSelectClip = onSelectClip,
+                        clipCountdownId = clipCountdownId,
+                        clipCountdownSec = clipCountdownSec,
+                        localMp3Query = localMp3Query,
+                        localMp3Results = localMp3Results,
+                        localMp3Searching = localMp3Searching,
+                        localMp3ImportingUri = localMp3ImportingUri,
+                        localMp3CountdownSec = localMp3CountdownSec,
+                        onLocalMp3QueryChange = onLocalMp3QueryChange,
+                        onImportLocalMp3 = onImportLocalMp3,
                     )
                 }
             }
@@ -230,6 +259,8 @@ fun FloatingBubbleRoot(
         FloatMode.TTS_SETTINGS -> TtsSettingsPanel(
             progressBarEnabled = ttsProgressBarEnabled,
             onToggleProgressBar = onToggleTtsProgressBar,
+            speakerPreviewEnabled = speakerPreviewEnabled,
+            onToggleSpeakerPreview = onToggleSpeakerPreview,
             delayMs = ttsDelayMs,
             onSetDelay = onSetTtsDelay,
             onBack = onCloseTtsSettings,
@@ -576,12 +607,41 @@ private fun LibraryTab(
     onSelectGroup: (FloatGroupItem?) -> Unit,
     clipsProvider: (String) -> Flow<List<FloatClipItem>>,
     onSelectClip: (String) -> Unit,
+    clipCountdownId: String? = null,
+    clipCountdownSec: Int = 0,
+    localMp3Query: String,
+    localMp3Results: List<FloatLocalMp3Item>,
+    localMp3Searching: Boolean,
+    localMp3ImportingUri: String?,
+    localMp3CountdownSec: Int = 0,
+    onLocalMp3QueryChange: (String) -> Unit,
+    onImportLocalMp3: (uriString: String, displayName: String, preferredGroupId: String?) -> Unit,
 ) {
+    LocalMp3SearchBar(
+        query = localMp3Query,
+        onQueryChange = onLocalMp3QueryChange,
+    )
+    Spacer(Modifier.height(8.dp))
+
+    val showLocalResults = localMp3Query.isNotBlank()
+    if (showLocalResults) {
+        LocalMp3ResultSection(
+            searching = localMp3Searching,
+            results = localMp3Results,
+            importingUri = localMp3ImportingUri,
+            countdownSec = localMp3CountdownSec,
+            onImport = { item ->
+                onImportLocalMp3(item.uriString, item.name, selectedGroup?.id)
+            },
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
     if (selectedGroup == null) {
         if (groups.isEmpty()) {
-            EmptyHint(stringResource(R.string.float_no_groups))
+            if (!showLocalResults) EmptyHint(stringResource(R.string.float_no_groups))
         } else {
-            LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+            LazyColumn(modifier = Modifier.heightIn(max = if (showLocalResults) 180.dp else 320.dp)) {
                 items(groups, key = { it.id }) { g ->
                     GroupRow(group = g) { onSelectGroup(g) }
                 }
@@ -619,11 +679,153 @@ private fun LibraryTab(
         val clipsFlow = remember(selectedGroup.id) { clipsProvider(selectedGroup.id) }
         val clips by clipsFlow.collectAsState(initial = emptyList())
         if (clips.isEmpty()) {
-            EmptyHint(stringResource(R.string.float_no_clips_in_group))
+            if (!showLocalResults) EmptyHint(stringResource(R.string.float_no_clips_in_group))
         } else {
-            LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+            LazyColumn(modifier = Modifier.heightIn(max = if (showLocalResults) 160.dp else 300.dp)) {
                 items(clips, key = { it.id }) { c ->
-                    ClipRow(clip = c) { onSelectClip(c.id) }
+                    val counting = clipCountdownId == c.id && clipCountdownSec > 0
+                    // 倒计时中可再点同一项取消；其它片段倒计时中禁用
+                    val clickEnabled = clipCountdownId == null || counting
+                    ClipRow(
+                        clip = c,
+                        countdownSec = if (counting) clipCountdownSec else 0,
+                        clickEnabled = clickEnabled,
+                    ) { onSelectClip(c.id) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalMp3SearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(OverlayShapes.Chip)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(OverlayColors.Fill)
+            .border(
+                BorderStroke(1.dp, if (focused) OverlayColors.Accent else OverlayColors.Border),
+                shape
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Filled.Search,
+            contentDescription = null,
+            tint = OverlayColors.OnDarkDim,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = TextStyle(color = OverlayColors.OnDark, fontSize = 13.sp),
+            cursorBrush = SolidColor(OverlayColors.Accent),
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { focused = it.isFocused },
+            decorationBox = { inner ->
+                if (query.isEmpty()) {
+                    Text(
+                        stringResource(R.string.float_local_mp3_hint),
+                        color = OverlayColors.OnDarkDim,
+                        fontSize = 13.sp
+                    )
+                }
+                inner()
+            }
+        )
+    }
+}
+
+@Composable
+private fun LocalMp3ResultSection(
+    searching: Boolean,
+    results: List<FloatLocalMp3Item>,
+    importingUri: String?,
+    countdownSec: Int = 0,
+    onImport: (FloatLocalMp3Item) -> Unit,
+) {
+    Text(
+        stringResource(R.string.float_local_mp3_section),
+        color = OverlayColors.OnDarkDim,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+    when {
+        searching && results.isEmpty() -> {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = OverlayColors.Accent,
+                    strokeWidth = 2.dp
+                )
+            }
+        }
+        results.isEmpty() -> EmptyHint(stringResource(R.string.float_local_mp3_empty))
+        else -> {
+            LazyColumn(modifier = Modifier.heightIn(max = 160.dp)) {
+                items(results, key = { it.uriString }) { item ->
+                    val busy = importingUri == item.uriString
+                    val counting = busy && countdownSec > 0
+                    // 倒计时中可再点同一项取消；导入中或其它项忙碌时禁用
+                    val clickEnabled = importingUri == null || counting
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(OverlayShapes.Card))
+                            .clickable(enabled = clickEnabled) { onImport(item) }
+                            .padding(horizontal = 10.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = item.name,
+                            color = OverlayColors.OnDark,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        when {
+                            counting -> {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    stringResource(R.string.float_local_mp3_countdown, countdownSec),
+                                    color = OverlayColors.Accent,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            busy -> {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    stringResource(R.string.float_local_mp3_importing),
+                                    color = OverlayColors.Accent,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            item.durationMs > 0 -> {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    formatMs(item.durationMs),
+                                    color = OverlayColors.OnDarkFaint,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -665,13 +867,18 @@ private fun GroupRow(group: FloatGroupItem, onClick: () -> Unit) {
 
 /** 片段行：当前播放项除了绿色 ✓，整行还铺一层淡绿底，扫一眼就能定位。 */
 @Composable
-private fun ClipRow(clip: FloatClipItem, onClick: () -> Unit) {
+private fun ClipRow(
+    clip: FloatClipItem,
+    countdownSec: Int = 0,
+    clickEnabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(OverlayShapes.Card))
             .background(if (clip.isCurrent) OverlayColors.SelectedRow else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(enabled = clickEnabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -693,6 +900,15 @@ private fun ClipRow(clip: FloatClipItem, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
+        if (countdownSec > 0) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.float_local_mp3_countdown, countdownSec),
+                color = OverlayColors.Accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
 
@@ -815,6 +1031,8 @@ private fun TtsTab(
 private fun TtsSettingsPanel(
     progressBarEnabled: Boolean,
     onToggleProgressBar: (Boolean) -> Unit,
+    speakerPreviewEnabled: Boolean,
+    onToggleSpeakerPreview: (Boolean) -> Unit,
     delayMs: Int,
     onSetDelay: (Int) -> Unit,
     onBack: () -> Unit,
@@ -849,6 +1067,24 @@ private fun TtsSettingsPanel(
                 Switch(
                     checked = progressBarEnabled,
                     onCheckedChange = onToggleProgressBar
+                )
+            }
+            // 本机扬声器试听：本地 MP3 / TTS 同步出声
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    stringResource(R.string.float_speaker_preview),
+                    color = OverlayColors.OnDark,
+                    fontSize = 14.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = speakerPreviewEnabled,
+                    onCheckedChange = onToggleSpeakerPreview
                 )
             }
             // 延时播放：点「播放」后等多久才真正出声，留出切到目标 App 的时间

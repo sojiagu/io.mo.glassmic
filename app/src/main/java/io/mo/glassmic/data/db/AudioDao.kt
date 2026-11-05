@@ -14,6 +14,9 @@ interface AudioDao {
     @Query("SELECT * FROM audio_groups ORDER BY sortOrder, name")
     fun observeGroups(): Flow<List<AudioGroupEntity>>
 
+    @Query("SELECT * FROM audio_groups ORDER BY sortOrder, name")
+    suspend fun listGroups(): List<AudioGroupEntity>
+
     @Query("SELECT * FROM audio_groups WHERE id = :id")
     suspend fun findGroup(id: String): AudioGroupEntity?
 

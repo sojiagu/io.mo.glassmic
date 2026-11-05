@@ -202,6 +202,16 @@ fun SettingsScreen(
                     )
                 }
                 SwitchRow(
+                    label = stringResource(R.string.settings_speaker_preview),
+                    hint = stringResource(R.string.settings_speaker_preview_hint),
+                    checked = if (cfg.floatingWindow.hasSpeakerPreviewEnabled()) {
+                        cfg.floatingWindow.speakerPreviewEnabled
+                    } else {
+                        true
+                    },
+                    onChange = vm::setSpeakerPreviewEnabled
+                )
+                SwitchRow(
                     label = stringResource(R.string.settings_volume_shortcut),
                     hint = stringResource(R.string.settings_volume_shortcut_hint),
                     checked = cfg.shortcuts.volumeKeysEnabled,

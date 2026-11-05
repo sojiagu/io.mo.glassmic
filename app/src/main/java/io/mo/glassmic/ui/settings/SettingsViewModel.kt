@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.mo.glassmic.service.WaveformOverlayService
 import io.mo.glassmic.data.audio.FloatingIconStore
+import io.mo.glassmic.data.audio.PlaybackController
 import io.mo.glassmic.data.config.ConfigStore
 import io.mo.glassmic.data.diag.AudioPipelineProbe
 import io.mo.glassmic.data.diag.DiagnosticBundler
@@ -58,6 +59,7 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val configStore: ConfigStore,
     private val floatingIconStore: FloatingIconStore,
+    private val playback: PlaybackController,
     private val bundler: DiagnosticBundler,
     private val probe: AudioPipelineProbe,
     private val audioStatsRepo: AudioStatsRepository,
@@ -181,6 +183,14 @@ class SettingsViewModel @Inject constructor(
         configStore.update {
             it.setFloatingWindow(it.floatingWindow.toBuilder().setWaveformOpacity(opacity.coerceIn(0.15f, 1f)))
         }
+    }
+
+    /** 本机扬声器同步试听（本地 MP3 / TTS）。 */
+    fun setSpeakerPreviewEnabled(enabled: Boolean) = viewModelScope.launch {
+        configStore.update {
+            it.setFloatingWindow(it.floatingWindow.toBuilder().setSpeakerPreviewEnabled(enabled))
+        }
+        playback.stopSpeakerPreviewIfDisabled()
     }
 
     // ============ 快捷操作 ============

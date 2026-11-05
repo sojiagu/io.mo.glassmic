@@ -153,6 +153,9 @@
     <string name="settings_waveform_enabled">实时波形显示</string>
     <string name="settings_waveform_enabled_hint">开启后弹出独立的实时波形悬浮窗</string>
     <string name="settings_waveform_opacity">波形透明度</string>
+    <string name="settings_speaker_preview">本机扬声器试听</string>
+    <string name="settings_speaker_preview_hint">播放本地 MP3 / TTS 时同步从扬声器出声；目标 App 开麦时会自动停。若微信等仍提示麦被占用，可关掉本开关，并清掉后台录音/导航/录屏后再试</string>
+    <string name="float_speaker_preview">本机扬声器试听</string>
     <string name="settings_volume_shortcut">音量键快捷操作</string>
     <string name="settings_volume_shortcut_hint">悬浮窗开启时，双击音量上键播放、双击音量下键暂停。需在 LSPosed 作用域勾选「系统框架」并重启后生效；开启期间单次调音量会延后约 0.3 秒。</string>
 
@@ -214,7 +217,7 @@
     <string name="settings_section_ai_tts">语音合成</string>
     <string name="ai_tts_title">AI 供应商（TTS）</string>
     <string name="ai_tts_nav_enabled">已启用 · %1$s</string>
-    <string name="ai_tts_nav_disabled">使用系统 TTS（点击配置在线 AI）</string>
+    <string name="ai_tts_nav_disabled">使用内置离线 Piper（点击可配在线 AI）</string>
 
     <!-- AI 供应商（TTS）配置页 -->
     <string name="ai_tts_section_access">接入</string>
@@ -272,11 +275,19 @@
     <string name="float_back">返回</string>
     <string name="float_no_groups">还没有音频分组</string>
     <string name="float_no_clips_in_group">该分组还没有音频</string>
+    <string name="float_local_mp3_hint">搜索本地 MP3…</string>
+    <string name="float_local_mp3_empty">未找到匹配的 MP3</string>
+    <string name="float_local_mp3_importing">导入中…</string>
+    <string name="float_local_mp3_countdown">%1$d 秒</string>
+    <string name="float_local_mp3_imported">已导入</string>
+    <string name="float_local_mp3_section">本地文件</string>
+    <string name="float_local_mp3_no_permission">无文件权限，请在主界面授予后再试</string>
+    <string name="float_local_mp3_import_failed">导入失败</string>
     <string name="float_tab_tts">🗣 文字转语音</string>
     <string name="float_tab_library">🎵 音频库</string>
     <string name="float_current">当前</string>
     <string name="float_settings">设置</string>
-    <string name="float_tts_input_hint">输入要合成的文字，先生成再播放</string>
+    <string name="float_tts_input_hint">输入要合成的文字，先生成再播放（本机扬声器会试听，同时喂给虚拟麦）</string>
     <string name="float_tts_generating">生成中…</string>
     <string name="float_tts_generate">生成</string>
     <string name="float_tts_play">播放</string>

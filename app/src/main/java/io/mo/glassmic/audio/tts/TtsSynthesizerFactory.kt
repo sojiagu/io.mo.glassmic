@@ -8,28 +8,35 @@ import javax.inject.Singleton
 /**
  * 按当前配置选择语音合成引擎。
  *
- * AI TTS 开启且填了 endpoint → 走 [AiTtsSynthesizer]；否则回退系统 [SystemTtsSynthesizer]。
- * AI 相关配置目前隐藏在设置里，普通用户始终走系统 TTS。
+ * 优先级：
+ * 1. AI TTS 开启 → [AiTtsSynthesizer]
+ * 2. 内置 Piper/Sherpa 可用 → [OfflineTtsSynthesizer]（小米等机型默认走这里）
+ * 3. 回退系统 [SystemTtsSynthesizer]
  */
 @Singleton
 class TtsSynthesizerFactory @Inject constructor(
     private val configStore: ConfigStore,
+    private val offline: OfflineTtsSynthesizer,
     private val system: SystemTtsSynthesizer,
-    private val ai: AiTtsSynthesizer
+    private val ai: AiTtsSynthesizer,
 ) {
     /** 返回当前应使用的合成器（不持有状态，可直接调用 synthesize）。 */
     suspend fun current(): SpeechSynthesizer {
         val aiCfg = runCatching { configStore.current().tts.ai }.getOrNull()
-        // 开启即走 AI（endpoint/model 可留空按 provider 用默认）；否则系统 TTS。
-        return if (aiCfg != null && aiCfg.enabled) {
+        if (aiCfg != null && aiCfg.enabled) {
             GlassLog.b("Tts") { "使用 AI TTS: ${aiCfg.provider}" }
-            ai
-        } else {
-            system
+            return ai
         }
+        if (offline.isAvailable()) {
+            GlassLog.b("Tts") { "使用内置离线 Piper TTS" }
+            return offline
+        }
+        GlassLog.b("Tts") { "内置离线不可用，回退系统 TTS" }
+        return system
     }
 
     fun releaseAll() {
+        runCatching { offline.release() }
         runCatching { system.release() }
         runCatching { ai.cancel() }
     }

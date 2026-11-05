@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
@@ -19,9 +20,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import io.mo.glassmic.R
 import io.mo.glassmic.core.Constants
 import io.mo.glassmic.core.model.SourceType
+import io.mo.glassmic.data.audio.AudioImportRepository
 import io.mo.glassmic.data.audio.FloatingIconStore
+import io.mo.glassmic.data.audio.LocalMp3Scanner
 import io.mo.glassmic.data.audio.PlaybackController
 import io.mo.glassmic.data.config.AppLocale
 import io.mo.glassmic.data.config.ConfigStore
@@ -33,8 +37,12 @@ import io.mo.glassmic.proto.AppConfig
 import io.mo.glassmic.proto.FloatingSize
 import io.mo.glassmic.ui.theme.LocalGlassEnabled
 import io.mo.glassmic.ui.theme.LocalReduceMotion
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -46,7 +54,7 @@ import javax.inject.Inject
  * 三态：球态 / 迷你播放条 / 选曲菜单，全部渲染在同一个挂到 WindowManager 的 ComposeView 里。
  * 手势：
  * - 未播放点击球 → 选曲菜单；播放中点击球 → 迷你播放条
- * - 迷你条内「换音源」→ 选曲菜单；选中片段 → 立即播放并回到迷你条
+ * - 迷你条内「换音源」→ 选曲菜单；选中片段 → 3 秒倒计时后播放并回到迷你条
  * - 拖动球移动，松手贴边
  */
 @AndroidEntryPoint
@@ -58,12 +66,25 @@ class FloatingWindowService : LifecycleService() {
     @Inject lateinit var audioDao: AudioDao
     @Inject lateinit var iconStore: FloatingIconStore
     @Inject lateinit var volumeShortcut: VolumeShortcutRepository
+    @Inject lateinit var audioImport: AudioImportRepository
+    @Inject lateinit var localMp3Scanner: LocalMp3Scanner
 
     private var windowManager: WindowManager? = null
     private var host: FloatingOverlayHost? = null
     private var params: WindowManager.LayoutParams? = null
 
     private val modeFlow = MutableStateFlow(FloatMode.BALL)
+    private val localMp3Query = MutableStateFlow("")
+    private val localMp3Results = MutableStateFlow<List<FloatLocalMp3Item>>(emptyList())
+    private val localMp3Searching = MutableStateFlow(false)
+    private val localMp3ImportingUri = MutableStateFlow<String?>(null)
+    /** 本地 MP3 延时播放剩余整秒；0 表示未在倒计时。 */
+    private val localMp3CountdownSec = MutableStateFlow(0)
+    private var localMp3PlayJob: Job? = null
+    /** 音频库片段延时播放：当前倒计时中的 clipId；null 表示未在倒计时。 */
+    private val clipCountdownId = MutableStateFlow<String?>(null)
+    private val clipCountdownSec = MutableStateFlow(0)
+    private var clipPlayJob: Job? = null
 
     /**
      * 悬浮球的锚点位置（用户拖动决定）。
@@ -88,6 +109,33 @@ class FloatingWindowService : LifecycleService() {
                 .map { it.shortcuts.volumeKeysEnabled }
                 .distinctUntilChanged()
                 .collect { applyVolumeShortcut(it) }
+        }
+        lifecycleScope.launch {
+            @OptIn(FlowPreview::class)
+            localMp3Query
+                .debounce(280)
+                .distinctUntilChanged()
+                .collect { q ->
+                    if (q.isBlank()) {
+                        localMp3Searching.value = false
+                        localMp3Results.value = emptyList()
+                        return@collect
+                    }
+                    localMp3Searching.value = true
+                    val hits = runCatching { localMp3Scanner.search(q) }
+                        .onFailure { GlassLog.b("Float") { "本地 MP3 搜索失败: ${it.message}" } }
+                        .getOrDefault(emptyList())
+                    // 查询期间用户可能已改关键字，丢弃过期结果
+                    if (localMp3Query.value != q) return@collect
+                    localMp3Results.value = hits.map {
+                        FloatLocalMp3Item(
+                            uriString = it.uri.toString(),
+                            name = it.displayName,
+                            durationMs = it.durationMs,
+                        )
+                    }
+                    localMp3Searching.value = false
+                }
         }
     }
 
@@ -218,6 +266,13 @@ class FloatingWindowService : LifecycleService() {
                 val mode by modeFlow.collectAsState()
                 val ttsGen by playback.ttsGen.collectAsState()
                 val ttsDelayRemainingMs by playback.ttsDelayRemainingMs.collectAsState()
+                val mp3Query by localMp3Query.collectAsState()
+                val mp3Results by localMp3Results.collectAsState()
+                val mp3Searching by localMp3Searching.collectAsState()
+                val mp3Importing by localMp3ImportingUri.collectAsState()
+                val mp3CountdownSec by localMp3CountdownSec.collectAsState()
+                val clipCountingId by clipCountdownId.collectAsState()
+                val clipCountingSec by clipCountdownSec.collectAsState()
 
                 val activeFile = rt.currentSourceType == SourceType.FILE && rt.enabled && !rt.safeMode
                 val currentId = cfg.currentAudioId
@@ -245,6 +300,17 @@ class FloatingWindowService : LifecycleService() {
                             list.map { FloatClipItem(it.id, it.displayName, it.id == currentId) }
                         }
                     },
+                    localMp3Query = mp3Query,
+                    localMp3Results = mp3Results,
+                    localMp3Searching = mp3Searching,
+                    localMp3ImportingUri = mp3Importing,
+                    localMp3CountdownSec = mp3CountdownSec,
+                    clipCountdownId = clipCountingId,
+                    clipCountdownSec = clipCountingSec,
+                    onLocalMp3QueryChange = { localMp3Query.value = it },
+                    onImportLocalMp3 = { uri, name, groupId ->
+                        onImportLocalMp3(uri, name, groupId)
+                    },
                     onBallTap = { onBallTap(activeFile) },
                     onTogglePause = { playback.togglePause() },
                     onSeek = { frac -> onSeek(frac, rt.durationMs) },
@@ -261,6 +327,12 @@ class FloatingWindowService : LifecycleService() {
                     ttsActive = rt.currentSourceType == SourceType.TTS,
                     onOpenTtsSettings = { setMode(FloatMode.TTS_SETTINGS) },
                     onToggleTtsProgressBar = { enabled -> onToggleTtsProgressBar(enabled) },
+                    speakerPreviewEnabled = if (cfg.floatingWindow.hasSpeakerPreviewEnabled()) {
+                        cfg.floatingWindow.speakerPreviewEnabled
+                    } else {
+                        true
+                    },
+                    onToggleSpeakerPreview = { enabled -> onToggleSpeakerPreview(enabled) },
                     ttsDelayMs = cfg.tts.delayMs,
                     onSetTtsDelay = { ms -> onSetTtsDelay(ms) },
                     ttsDelayRemainingMs = ttsDelayRemainingMs,
@@ -282,12 +354,117 @@ class FloatingWindowService : LifecycleService() {
         setMode(if (activeFile) FloatMode.MINI_BAR else FloatMode.MENU)
     }
 
+    /**
+     * 音频库片段：先设为音源并暂停，倒计时 [LOCAL_MP3_PLAY_DELAY_SEC] 秒后再播放。
+     * 倒计时期间再点同一项可取消。
+     */
     private fun onSelectClip(clipId: String) {
-        lifecycleScope.launch {
-            val ok = playback.setCurrentClip(clipId)
-            if (ok) setMode(FloatMode.MINI_BAR)
-            else GlassLog.b("Float") { "选中片段失败: $clipId" }
+        if (clipCountdownId.value == clipId && clipCountdownSec.value > 0) {
+            clipPlayJob?.cancel()
+            clipPlayJob = null
+            clipCountdownId.value = null
+            clipCountdownSec.value = 0
+            playback.pause()
+            GlassLog.b("Float") { "音频库片段延时播放已取消" }
+            return
         }
+        if (clipCountdownId.value != null) return
+        if (localMp3ImportingUri.value != null) return
+        clipPlayJob = lifecycleScope.launch {
+            clipCountdownId.value = clipId
+            clipCountdownSec.value = 0
+            try {
+                val ok = playback.setCurrentClip(clipId, startPaused = true)
+                if (!ok) {
+                    GlassLog.b("Float") { "选中片段失败: $clipId" }
+                    return@launch
+                }
+                for (sec in LOCAL_MP3_PLAY_DELAY_SEC downTo 1) {
+                    clipCountdownSec.value = sec
+                    delay(1_000L)
+                }
+                clipCountdownSec.value = 0
+                playback.resume()
+                setMode(FloatMode.MINI_BAR)
+            } catch (e: CancellationException) {
+                clipCountdownSec.value = 0
+                throw e
+            } finally {
+                if (clipCountdownId.value == clipId) {
+                    clipCountdownId.value = null
+                    clipCountdownSec.value = 0
+                }
+            }
+        }
+    }
+
+    /**
+     * 悬浮窗本地 MP3：导入到当前/首个/新建「本地导入」分组，先暂停设为当前音源，
+     * 倒计时 [LOCAL_MP3_PLAY_DELAY_SEC] 秒后再播放。倒计时期间再点同一项可取消。
+     */
+    private fun onImportLocalMp3(uriString: String, displayName: String, preferredGroupId: String?) {
+        // 倒计时中再点同一项 → 取消，不出声
+        if (localMp3ImportingUri.value == uriString && localMp3CountdownSec.value > 0) {
+            localMp3PlayJob?.cancel()
+            localMp3PlayJob = null
+            localMp3CountdownSec.value = 0
+            localMp3ImportingUri.value = null
+            playback.pause()
+            GlassLog.b("Float") { "本地 MP3 延时播放已取消" }
+            return
+        }
+        if (localMp3ImportingUri.value != null) return
+        if (clipCountdownId.value != null) return
+        localMp3PlayJob = lifecycleScope.launch {
+            localMp3ImportingUri.value = uriString
+            localMp3CountdownSec.value = 0
+            try {
+                val uri = Uri.parse(uriString)
+                val groupId = resolveImportGroupId(preferredGroupId)
+                val cleanName = displayName
+                    .removeSuffix(".mp3").removeSuffix(".MP3").removeSuffix(".Mp3")
+                    .ifBlank { displayName }
+                val clip = audioImport.importFromUri(uri, groupId, displayNameOverride = cleanName)
+                // 先设为音源但暂停，留出切 App 时间
+                val ok = playback.setCurrentClip(clip.id, startPaused = true)
+                if (!ok) {
+                    GlassLog.b("Float") { "本地 MP3 已导入但设为音源失败: ${clip.displayName}" }
+                    return@launch
+                }
+                for (sec in LOCAL_MP3_PLAY_DELAY_SEC downTo 1) {
+                    localMp3CountdownSec.value = sec
+                    delay(1_000L)
+                }
+                localMp3CountdownSec.value = 0
+                playback.resume()
+                localMp3Query.value = ""
+                localMp3Results.value = emptyList()
+                setMode(FloatMode.MINI_BAR)
+                GlassLog.b("Float") { "本地 MP3 已导入并播放: ${clip.displayName}" }
+            } catch (e: CancellationException) {
+                localMp3CountdownSec.value = 0
+                throw e
+            } catch (t: Throwable) {
+                GlassLog.b("Float") { "本地 MP3 导入失败: ${t.message}" }
+            } finally {
+                if (localMp3ImportingUri.value == uriString) {
+                    localMp3ImportingUri.value = null
+                    localMp3CountdownSec.value = 0
+                }
+            }
+        }
+    }
+
+    private suspend fun resolveImportGroupId(preferredGroupId: String?): String {
+        preferredGroupId?.takeIf { it.isNotBlank() }?.let { id ->
+            if (audioDao.findGroup(id) != null) return id
+        }
+        audioDao.listGroups().firstOrNull()?.id?.let { return it }
+        return audioImport.createGroup(
+            name = getString(R.string.float_local_mp3_section),
+            emoji = "📁",
+            policy = null,
+        ).id
     }
 
     private fun onGenerateTts(text: String) {
@@ -322,6 +499,17 @@ class FloatingWindowService : LifecycleService() {
         }
     }
 
+    private fun onToggleSpeakerPreview(enabled: Boolean) {
+        lifecycleScope.launch {
+            configStore.update {
+                it.setFloatingWindow(
+                    it.floatingWindow.toBuilder().setSpeakerPreviewEnabled(enabled).build()
+                )
+            }
+            playback.stopSpeakerPreviewIfDisabled()
+        }
+    }
+
     private fun onSetTtsDelay(delayMs: Int) {
         lifecycleScope.launch {
             configStore.update {
@@ -353,8 +541,10 @@ class FloatingWindowService : LifecycleService() {
 
     private fun setMode(mode: FloatMode) {
         modeFlow.value = mode
-        // TTS 面板与其设置面板（自定义延时输入）需要输入法焦点，其它态保持不可聚焦（不拦截触摸）
-        setWindowFocusable(mode == FloatMode.TTS || mode == FloatMode.TTS_SETTINGS)
+        // TTS / TTS 设置 / 音频库（本地 MP3 搜索框）需要输入法焦点，其它态保持不可聚焦
+        setWindowFocusable(
+            mode == FloatMode.TTS || mode == FloatMode.TTS_SETTINGS || mode == FloatMode.MENU
+        )
         // 展开态（迷你条/菜单/TTS）确保不超出屏幕右边；收起时还原到球的锚点
         if (mode != FloatMode.BALL) clampExpandedX() else restoreAnchor()
     }
@@ -427,6 +617,9 @@ class FloatingWindowService : LifecycleService() {
     companion object {
         private const val DEFAULT_X = 24
         private const val DEFAULT_Y = 300
+
+        /** 悬浮窗选曲 / 本地 MP3：设为音源后延时再播放的秒数。 */
+        private const val LOCAL_MP3_PLAY_DELAY_SEC = 3
 
         /** 自定义延时上限 60s：再长就该用别的方式了，也避免误输入把语音永远压住。 */
         const val MAX_TTS_DELAY_MS = 60_000

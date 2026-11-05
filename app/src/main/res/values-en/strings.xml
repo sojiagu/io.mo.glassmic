@@ -153,6 +153,9 @@
     <string name="settings_waveform_enabled">Live Waveform Display</string>
     <string name="settings_waveform_enabled_hint">Shows a separate live waveform floating window when enabled</string>
     <string name="settings_waveform_opacity">Waveform Opacity</string>
+    <string name="settings_speaker_preview">Speaker Preview</string>
+    <string name="settings_speaker_preview_hint">Plays local MP3 / TTS on the speaker too; auto-stops when a target app opens the mic. If an app says the mic is busy, turn this off and force-stop other recording/nav/screen-record apps</string>
+    <string name="float_speaker_preview">Speaker Preview</string>
     <string name="settings_volume_shortcut">Volume Key Shortcuts</string>
     <string name="settings_volume_shortcut_hint">While the floating window is open, double-press Volume Up to play and Volume Down to pause. Requires "Android System" in the LSPosed scope and a reboot; single volume presses are delayed by ~0.3s while enabled.</string>
 
@@ -214,7 +217,7 @@
     <string name="settings_section_ai_tts">Speech Synthesis</string>
     <string name="ai_tts_title">AI Provider (TTS)</string>
     <string name="ai_tts_nav_enabled">Enabled · %1$s</string>
-    <string name="ai_tts_nav_disabled">Using system TTS (tap to configure online AI)</string>
+    <string name="ai_tts_nav_disabled">Using built-in offline Piper (tap to configure online AI)</string>
 
     <!-- AI Provider (TTS) settings page -->
     <string name="ai_tts_section_access">Access</string>
@@ -272,11 +275,19 @@
     <string name="float_back">Back</string>
     <string name="float_no_groups">No clip groups yet</string>
     <string name="float_no_clips_in_group">This group has no audio yet</string>
+    <string name="float_local_mp3_hint">Search local MP3…</string>
+    <string name="float_local_mp3_empty">No matching MP3 found</string>
+    <string name="float_local_mp3_importing">Importing…</string>
+    <string name="float_local_mp3_countdown">%1$ds</string>
+    <string name="float_local_mp3_imported">Imported</string>
+    <string name="float_local_mp3_section">Local files</string>
+    <string name="float_local_mp3_no_permission">No file access. Grant permission in the main app first</string>
+    <string name="float_local_mp3_import_failed">Import failed</string>
     <string name="float_tab_tts">🗣 Text-to-Speech</string>
     <string name="float_tab_library">🎵 Library</string>
     <string name="float_current">Current</string>
     <string name="float_settings">Settings</string>
-    <string name="float_tts_input_hint">Enter text to synthesize, generate before playing</string>
+    <string name="float_tts_input_hint">Enter text, generate, then play (speaker preview + virtual mic)</string>
     <string name="float_tts_generating">Generating…</string>
     <string name="float_tts_generate">Generate</string>
     <string name="float_tts_play">Play</string>

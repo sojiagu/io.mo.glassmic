@@ -76,12 +76,29 @@ class AudioImportRepository @Inject constructor(
         require(dao.findGroup(groupId) != null) { "片段组不存在: $groupId" }
 
         val resolver1 = context.contentResolver
-        val mimeType = resolver1.getType(uri) ?: "audio/mpeg"
+        val (origName, sizeFromUri) = queryDisplayInfo(uri)
+        val nameHint = displayNameOverride?.takeIf { it.isNotBlank() } ?: origName ?: "audio"
+        val inferredExt = nameHint.substringAfterLast('.', "").lowercase()
+            .takeIf { it in setOf("mp3", "wav", "m4a", "aac", "ogg", "flac", "bin") }
+        // MediaStore / 部分 ROM 可能返回空 MIME；按扩展名兜底，避免本地 MP3 导入被拒
+        val mimeType = resolver1.getType(uri)
+            ?.takeIf { it.startsWith("audio/") }
+            ?: when (inferredExt) {
+                "mp3" -> "audio/mpeg"
+                "wav" -> "audio/wav"
+                "m4a" -> "audio/mp4"
+                "aac" -> "audio/aac"
+                "ogg" -> "audio/ogg"
+                "flac" -> "audio/flac"
+                else -> "audio/mpeg"
+            }
         require(mimeType.startsWith("audio/")) { "非音频文件: $mimeType" }
 
-        val (origName, sizeFromUri) = queryDisplayInfo(uri)
-        val displayName = displayNameOverride?.takeIf { it.isNotBlank() } ?: origName ?: "audio"
-        val ext = mimeToExt(mimeType) ?: (origName?.substringAfterLast('.', "")?.lowercase()) ?: "bin"
+        val ext = mimeToExt(mimeType) ?: inferredExt ?: "bin"
+        val baseName = nameHint
+            .removeSuffix(".$ext")
+            .removeSuffix(".${ext.uppercase()}")
+            .ifBlank { "audio" }
 
         val clipId = UUID.randomUUID().toString()
         val rel = "$groupId/$clipId.$ext"
@@ -97,8 +114,8 @@ class AudioImportRepository @Inject constructor(
         val entity = AudioClipEntity(
             id = clipId,
             groupId = groupId,
-            displayName = displayName.removeSuffix(".$ext"),
-            fileName = "$displayName.$ext",
+            displayName = baseName,
+            fileName = "$baseName.$ext",
             relativePath = rel,
             mimeType = mimeType,
             durationMs = durationMs,

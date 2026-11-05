@@ -32,3 +32,8 @@ keystore.properties
 # Logs
 *.log
 IDEA.md
+# Local sync extras
+.gradle-home/
+local-m2/
+_tts_download/
+_sync_work/
